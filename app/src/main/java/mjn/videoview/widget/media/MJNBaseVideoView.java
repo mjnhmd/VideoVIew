@@ -16,6 +16,7 @@
 package mjn.videoview.widget.media;
 
 import android.annotation.TargetApi;
+import android.app.Activity;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.res.Resources;
@@ -23,15 +24,20 @@ import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Message;
 import android.support.annotation.NonNull;
+import android.support.annotation.StringDef;
 import android.support.v7.app.AlertDialog;
 import android.util.AttributeSet;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.MediaController;
 
@@ -42,12 +48,14 @@ import mjn.videoview.R;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
 import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 
-public abstract class MJNBaseVideoView extends FrameLayout implements MediaController.MediaPlayerControl {
+public abstract class MJNBaseVideoView extends FrameLayout implements MediaController.MediaPlayerControl, View.OnTouchListener {
     private String TAG = "IjkVideoView";
     // settable by the client
     private Uri mUri;
     private Map<String, String> mHeaders;
 
+    private final int PROGRESS_UPDATE = 1;
+    private final int PROGRESS_UPDATE_DURATION = 500;
     // all possible internal states
     protected static final int STATE_ERROR = -1;
     protected static final int STATE_IDLE = 0;
@@ -83,6 +91,7 @@ public abstract class MJNBaseVideoView extends FrameLayout implements MediaContr
     private boolean mCanSeekBack = true;
     private boolean mCanSeekForward = true;
     private boolean mControllerShow = true;
+    protected AudioManager mAudioManager; //音频焦点的监听
 
     /** Subtitle rendering widget overlaid on top of the video. */
     // private RenderingWidget mSubtitleWidget;
@@ -127,12 +136,24 @@ public abstract class MJNBaseVideoView extends FrameLayout implements MediaContr
         initVideoView(context);
     }
 
+    Handler mHandler = new Handler(){
+        @Override
+        public void handleMessage(Message msg) {
+            super.handleMessage(msg);
+            switch (msg.what){
+                case PROGRESS_UPDATE:
+                    onProgressUpdate();
+                    sendEmptyMessageDelayed(PROGRESS_UPDATE,PROGRESS_UPDATE_DURATION);
+            }
+        }
+    };
     private void initVideoView(Context context) {
         LayoutInflater.from(context).inflate(getLayoutID(),this);
         mAppContext = context.getApplicationContext();
+        mAudioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
         mVideoContainer = (FrameLayout) findViewById(R.id.video_container);
         initRender();
-
+        mVideoContainer.setOnTouchListener(this);
         mVideoWidth = 0;
         mVideoHeight = 0;
         setFocusable(true);
@@ -452,7 +473,7 @@ public abstract class MJNBaseVideoView extends FrameLayout implements MediaContr
             new IMediaPlayer.OnBufferingUpdateListener() {
                 public void onBufferingUpdate(IMediaPlayer mp, int percent) {
                     mCurrentBufferPercentage = percent;
-                    onProgressUpdate(percent);
+                    onBufferProgressUpdate(percent);
                 }
             };
 
@@ -654,6 +675,7 @@ public abstract class MJNBaseVideoView extends FrameLayout implements MediaContr
             mCurrentState = STATE_PLAYING;
         }
         mTargetState = STATE_PLAYING;
+        mHandler.sendEmptyMessageDelayed(PROGRESS_UPDATE,PROGRESS_UPDATE_DURATION);
     }
 
     @Override
@@ -665,6 +687,7 @@ public abstract class MJNBaseVideoView extends FrameLayout implements MediaContr
             }
         }
         mTargetState = STATE_PAUSED;
+        mHandler.removeMessages(PROGRESS_UPDATE);
     }
 
     public void suspend() {
@@ -790,12 +813,216 @@ public abstract class MJNBaseVideoView extends FrameLayout implements MediaContr
         }
     }
 
-    protected int getLayoutID(){return 0;}
+    /**
+     * 当前是不是横屏
+     *
+     * @return
+     */
+    protected boolean isFullScreen() {
+        DisplayMetrics dm = new DisplayMetrics();
+        ((Activity) getContext()).getWindowManager().getDefaultDisplay().getMetrics(dm);
+        int width = dm.widthPixels;
+        int height = dm.heightPixels;
+        return width > height;
+    }
+    /**
+     * 获取屏幕宽度
+     *
+     * @param context
+     * @return
+     */
+    public static int getScreenWidth(Context context) {
+        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        DisplayMetrics dm = new DisplayMetrics();
+        wm.getDefaultDisplay().getMetrics(dm);
+        return dm.widthPixels;
+    }
+    private void preShowProgressDialog(float deltaX, int seekTimePosition, int totalTimeDuration){
+        if (!isFullScreen()) {
+            return;
+        }
+        showProgressDialog(deltaX,seekTimePosition,totalTimeDuration);
+    }
+
+    /**
+     * 滑动改变亮度
+     *
+     * @param percent
+     */
+    private void onBrightnessSlide(float percent) {
+        float mBrightnessData = -1; //亮度
+        mBrightnessData = ((Activity) (getContext())).getWindow().getAttributes().screenBrightness;
+        if (mBrightnessData <= 0.00f) {
+            mBrightnessData = 0.50f;
+        } else if (mBrightnessData < 0.01f) {
+            mBrightnessData = 0.01f;
+        }
+        WindowManager.LayoutParams lpa = ((Activity) (getContext())).getWindow().getAttributes();
+        lpa.screenBrightness = mBrightnessData + percent;
+        if (lpa.screenBrightness > 1.0f) {
+            lpa.screenBrightness = 1.0f;
+        } else if (lpa.screenBrightness < 0.01f) {
+            lpa.screenBrightness = 0.01f;
+        }
+        showBrightnessDialog(lpa.screenBrightness);
+        ((Activity) (getContext())).getWindow().setAttributes(lpa);
+    }
+
+
+    /**
+     * 获取屏幕高度
+     *
+     * @param context
+     * @return
+     */
+    public static int getScreenHeight(Context context) {
+        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        DisplayMetrics dm = new DisplayMetrics();
+        wm.getDefaultDisplay().getMetrics(dm);
+        return dm.heightPixels;
+    }
+
+    protected abstract int getLayoutID();
     protected void hideController(){mControllerShow = false;}
     protected void showController(){mControllerShow = true;}
-    protected abstract void onProgressUpdate(int percent);
+    protected abstract void onBufferProgressUpdate(int percent);
+    protected abstract void onProgressUpdate();
     protected abstract void onVideoComplete();
+    protected void dismissProgressDialog(){};
+    protected void dismissVolumeDialog(){};
+    protected void dismissBrightnessDialog(){};
+    protected void showProgressDialog(float deltaX, int seekTimePosition, int totalTimeDuration){}
+    protected void showVolumeDialog(float deltaY, int volumePercent) {}
+    protected void showBrightnessDialog(float percent) {}
 
+
+    @Override
+    public boolean onTouch(View view, MotionEvent event) {
+        float x = event.getX();
+        float y = event.getY();
+
+        if (view.getId() == R.id.video_container) {
+            float mDownX = 0;//触摸的X
+            float mDownY = 0; //触摸的Y
+            float mLastMoveX = 0;
+            float mMoveY;
+            int mThreshold = 0; //手势偏差值
+            boolean mIsTouchWiget = false;
+            boolean mChangeVolume = false;//是否改变音量
+            boolean mChangePosition = false;//是否改变播放进度
+            boolean mShowVKey = false; //触摸显示虚拟按键
+            boolean mBrightness = false;//是否改变亮度
+            boolean mFirstTouch = false;//是否首次触摸
+            int mDownPosition = 0; //手指放下的位置
+            int mGestureDownVolume = 0; //手势调节音量的大小
+            int mSeekTimePosition = 0; //手动改变滑动的位置
+            int mSeekEndOffset = 0; //手动滑动的起始偏移位置
+
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    mDownX = x;
+                    mDownY = y;
+                    mMoveY = 0;
+                    mChangeVolume = false;
+                    mChangePosition = false;
+                    mShowVKey = false;
+                    mBrightness = false;
+                    mFirstTouch = true;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+
+                    float deltaX = x - mDownX;
+                    float deltaY = y - mDownY;
+                    float absDeltaX = Math.abs(deltaX);
+                    float absDeltaY = Math.abs(deltaY);
+                    int screenWidth = getScreenWidth(getContext());
+                    int screenHeight = getScreenHeight(getContext());
+                    if (isFullScreen() || mIsTouchWiget) {
+                        if (!mChangePosition && !mChangeVolume && !mBrightness) {
+                            if (absDeltaX > mThreshold || absDeltaY > mThreshold) {
+                                if (absDeltaX >= mThreshold) {
+                                    //防止全屏虚拟按键
+
+                                    if (Math.abs(screenWidth - mDownX) > mSeekEndOffset) {
+                                        mChangePosition = true;
+                                        mDownPosition = getCurrentPosition();
+                                    } else {
+                                        mShowVKey = true;
+                                    }
+                                } else {
+
+                                    boolean noEnd = Math.abs(screenHeight - mDownY) > mSeekEndOffset;
+                                    if (mFirstTouch) {
+                                        mBrightness = (mDownX < screenWidth * 0.5f) && noEnd;
+                                        mFirstTouch = false;
+                                    }
+                                    if (!mBrightness) {
+                                        mChangeVolume = noEnd;
+                                        mGestureDownVolume = mAudioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                                    }
+                                    mShowVKey = !noEnd;
+                                }
+                            }
+                        }
+                    }
+
+                    if (mChangePosition) {
+                        int totalTimeDuration = getDuration();
+
+                        mSeekTimePosition = (int) (mDownPosition + deltaX * totalTimeDuration / getScreenWidth(getContext()));
+                        if (mSeekTimePosition > totalTimeDuration)
+                            mSeekTimePosition = totalTimeDuration;
+
+                        preShowProgressDialog(x - mLastMoveX, mSeekTimePosition, totalTimeDuration);
+                    } else if (mChangeVolume) {
+                        if (true) {
+                            deltaY = -deltaY;
+                            int max = mAudioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                            int deltaV = (int) (max * deltaY * 3 / screenHeight);
+                            mAudioManager.setStreamVolume(AudioManager.STREAM_MUSIC, mGestureDownVolume + deltaV, 0);
+                            int volumePercent = (int) (mGestureDownVolume * 100 / max + deltaY * 3 * 100 / screenHeight);
+
+                            showVolumeDialog(-deltaY, volumePercent);
+                        }
+                    } else if (!mChangePosition && mBrightness) {
+                        if (Math.abs(deltaY) > mThreshold) {
+                            float percent = (-deltaY / screenHeight);
+                            onBrightnessSlide(percent);
+                            mDownY = y;
+                        }
+                    }
+
+                    mLastMoveX = x;
+                    break;
+                case MotionEvent.ACTION_UP:
+                    dismissProgressDialog();
+                    dismissVolumeDialog();
+                    dismissBrightnessDialog();
+                    if (mChangePosition) {
+                        seekTo(mSeekTimePosition);
+                        int duration = getDuration();
+                        int progress = mSeekTimePosition * 100 / (duration == 0 ? 1 : duration);
+                    } else if (mBrightness) {
+
+                    } else if (mChangeVolume) {
+
+                    }
+
+                    hideController();
+                    //控制UI交互控件
+                    if (!mChangePosition && !mChangeVolume && !mBrightness) {
+                        toggleMediaControlsVisiblity();
+                    }
+
+                    //不要和隐藏虚拟按键后，滑出虚拟按键冲突
+                    if (mShowVKey) {
+                        return true;
+                    }
+                    break;
+            }
+        }
+        return false;
+    }
 
 
 }

@@ -207,15 +207,20 @@ public class MJNVideoView extends MJNBaseVideoView implements View.OnClickListen
     }
 
     @Override
-    protected void onProgressUpdate(int percent) {
-            int position = getCurrentPosition();
-            int duration = getDuration();
+    protected void onBufferProgressUpdate(int percent) {
 
-            int progress = position * 100 / (duration == 0 ? 1 : duration);
+
         if (percent > 94) percent = 100;
-        if (percent != 0) {
-            mSeekBar.setProgress(percent);
-        }
+        mSeekBar.setSecondaryProgress(percent);
+
+    }
+
+    @Override
+    protected void onProgressUpdate() {
+        int position = getCurrentPosition();
+        int duration = getDuration();
+        int progress = position * 100 / (duration == 0 ? 1 : duration);
+        mSeekBar.setProgress(progress);
         mTotalDurationTv.setText(positionOfTime(duration));
         if (position > 0) {
             mPlayedDurationTv.setText(positionOfTime(position));
@@ -245,4 +250,25 @@ public class MJNVideoView extends MJNBaseVideoView implements View.OnClickListen
         mPlayBtn.setVisibility(GONE);
         showController();
     }
+
+    @Override
+    protected void dismissProgressDialog() {
+
+    }
+
+    @Override
+    protected void dismissVolumeDialog() {
+
+    }
+
+    @Override
+    protected void dismissBrightnessDialog() {
+
+    }
+
+    @Override
+    protected void showProgressDialog(float deltaX, int seekTimePosition, int totalTimeDuration) {
+
+    }
+
 }
